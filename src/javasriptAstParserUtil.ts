@@ -59,7 +59,7 @@ export function canBeComputed(statement: Statement) {
 }
 
 export function assertUnexpect(parent: Statement, child: Statement, getUnexpectMsg?: (child: Statement) => string | null) {
-  if (child && child.type === 'UnExpectStatement' || child.unexpects.length) {
+  if (child && child.type === 'UnExpectStatement' || child && child.unexpects.length) {
     parent.unexpects.push(child);
     return true;
   }

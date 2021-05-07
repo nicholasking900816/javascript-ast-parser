@@ -4,7 +4,7 @@ import { StringLiteratureStatement } from "./StringLiteratureStatement";
 
 export class ObjectLiteratureStatement extends Statement {
     type = 'ObjectLiteratureStatement';
-    properties: Array<{key: StringLiteratureStatement | IdentifierLiteratureStatement, value: Statement}>
+    properties: Array<{key: StringLiteratureStatement | IdentifierLiteratureStatement, value: Statement}> = [];
     constructor(currentToken: any) {
         super();
         this.loc.start = currentToken.loc.start;

@@ -2,12 +2,16 @@ import { JavascriptAstParsser } from "../JavascriptAstParser";
 
 debugger;
 let ast = new JavascriptAstParsser(`
-    function aa bb (a, b) {
-        console.log(a + b);
-        console.log('sssss');
-    }
+    do {
+        let a = console.log('dd')
+    } while(a++) {}
 `).parse();
 
 console.log(ast);
 
 function aa () {}
+try {
+
+} finally {
+    
+}

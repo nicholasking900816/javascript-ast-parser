@@ -73,7 +73,15 @@ export class JavascriptAstParsser {
     let topLevelBlock = this.ast.topLevelBlock;
     let count = 0;
     while(!this.isReadAll() && 1000000 > count++) {
-      topLevelBlock.body.push(this.parseStatement() as any)
+      let statement = this.parseStatement();
+      if (!statement) {
+        if (this.currentToken.value === '{') {
+          statement = this.parseObjLiteratureStatement()
+        } else if (this.currentToken.value === '[') {
+          statement = this.parseArrayLiteratureStatement()
+        }
+      }
+      statement && topLevelBlock.body.push(statement as any)
     }
     return this.ast;
   }
@@ -137,15 +145,13 @@ export class JavascriptAstParsser {
     return nextChar;
   }
 
-  private consumeNextWordIfMatch(expect: string, expectSameLine = false) {
-    let pos = this.pos, line = this.currentLine;
+  private consumeNextWordIfMatch(expect: string) {
+    let reset = this.markPos();
     this.next();
-    if (this.currentToken.value === expect && (!expectSameLine || line === this.currentLine)) {
+    if (this.currentToken.value === expect) {
       return true
     } 
-    this.pos = pos;
-    this.tokens.pop();
-    this.currentToken = this.tokens[this.tokens.length - 1];
+    reset();
     return false;
   }
 
@@ -178,7 +184,6 @@ export class JavascriptAstParsser {
     if (this.input.slice(this.pos, this.pos + 1) === closeToken) {
       this.pos ++;
       this.startTokens.pop();
-      debugger;
       return true
     }
     this.pos = pos;
@@ -208,7 +213,7 @@ export class JavascriptAstParsser {
         assertUnexpect(this.parsingStatement, statement, ()=> `expect ${expectTokenValue}`);
         return false;
       }
-      if (this.currentToken.value !== value && !this.isReadAll()) {
+      if (this.currentToken.value !== value) {
         this.parsingStatement.unexpects.push(new UnExpectStatement(this.currentToken.value, `expect ${value}`, this.currentToken.loc))
         return false;
       } 
@@ -245,11 +250,9 @@ export class JavascriptAstParsser {
       } 
       return this.tryParsePrefixUnary(operator) || operator;
     } else if (this.currentToken.type === 'BlockStart') {
-      debugger;
       this.startTokens.push(this.currentToken.value);
       return null;
     } else if (this.currentToken.type === 'BlockClose') {
-      debugger;
       if (this.currentToken.value === this.expectCloseToken) {
         this.startTokens.pop();
         return null;
@@ -268,9 +271,7 @@ export class JavascriptAstParsser {
     if (!this.parsingStatement) {
       return statement;
     }
-    if (assertUnexpect(this.parsingStatement, statement, () => {
-      if (!statement) return `unexpect token "${this.currentToken.value}"`
-    })) return null;
+    if (assertUnexpect(this.parsingStatement, statement)) return null;
     return statement;
   }
 
@@ -281,6 +282,10 @@ export class JavascriptAstParsser {
     if (statement) {
       if(types.includes(statement.type)) return statement;
       this.parsingStatement.unexpects.push(new UnExpectStatement(statement, 'unexpect statement', this.currentToken.loc));
+    } else {
+      if (this.parsingStatement && this.parsingStatement.unexpects.length) return null;
+      if (this.currentToken.value === '{' && expectStatementType.includes('ObjectLiteratureStatement')) return this.parseObjLiteratureStatement();
+      if (this.currentToken.value === '[' && expectStatementType.includes('ArrayLiteratureStatement')) return this.parseArrayLiteratureStatement();
     }
 
     return null;
@@ -433,9 +438,15 @@ export class JavascriptAstParsser {
     let prevContext = this.excutionFlag;
     this.excutionFlag = 0;
     let statement = this.parseStatement();
-    let count = 0;
-    while(!endCheck(statement) && !this.isReadAll() && 1000000 > count++) {
-      block.body.push(statement);
+    while(!endCheck(statement) && !this.isReadAll()) {
+      if (!statement) {
+        if (this.currentToken.value === '{') {
+          statement = this.parseObjLiteratureStatement()
+        } else if (this.currentToken.value === '[') {
+          statement = this.parseArrayLiteratureStatement()
+        }
+      }
+      statement && block.body.push(statement);
       statement = this.parseStatement();
     }
     this.excutionFlag = prevContext;
@@ -569,32 +580,34 @@ export class JavascriptAstParsser {
     return endParse();
   }
 
-  private parseLiteratureObjStatement() {
+  private parseObjLiteratureStatement() {
     let statement = new ObjectLiteratureStatement(this.currentToken);
     let endParse = this.startParse(statement);
     let key: Statement, value: Statement;
     while(key = this.parseStatementIfTypeMatch(['StringLiteratureStatement','IdentifierLiteratureStatement'])) {
-      if (this.expectNextNullStatement(':') && (value = this.parseStatementIfTypeMatch(canBeValueStatements))) {
+      if (this.expectNextNullStatement(':') && (value = this.parseStatementIfTypeMatch(canBeValueStatements.concat(['FunDeclarationStatement'])))) {
         statement.properties.push({
           key: key as any,
           value: value
         });
-        if (this.consumeCloseTokenIfMatch('}')) {
+        if (this.consumeCloseTokenIfMatch('}') || !this.expectNextNullStatement(',')) {
           break
         }
+      } else {
+        break;
       }
-      break;
     }
     return endParse();
   }
 
-  private parseLiteratureArrayStatement() {
+  private parseArrayLiteratureStatement() {
     let statement = new ArrayLiteratureStatement(this.currentToken);
     let endParse = this.startParse(statement);
     let value: Statement;
-    while(value = this.parseStatementIfTypeMatch(canBeValueStatements)) {
+    if (this.consumeCloseTokenIfMatch(']')) return endParse();
+    while(value = this.parseStatementIfTypeMatch(canBeValueStatements.concat(['FunDeclarationStatement']))) {
       statement.items.push(value);
-      if (this.consumeCloseTokenIfMatch(']')) {
+      if (this.consumeCloseTokenIfMatch(']') || !this.expectNextNullStatement(',')) {
         break;
       }
     }
@@ -612,17 +625,27 @@ export class JavascriptAstParsser {
     statement.tryBody = this.parseBlock('TryBody');
 
     if(this.consumeNextWordIfMatch('catch')) {
-      if(!(statement.catchCallback = this.parseStatementIfTypeMatch('FunDeclarationStatement'))) return endParse()
+      let catchCallback = this.parseFunDeclarationStatement() as FunDeclarationStatement;
+      if (catchCallback.unexpects.length) {
+        statement.unexpects.push(catchCallback)
+        return endParse();
+      } 
+      statement.catchCallback = catchCallback;
     }
 
-    if(this.consumeNextWordIfMatch('finnal') && this.expectNextNullStatement('{')) {
+    if(this.consumeNextWordIfMatch('finally') && this.expectNextNullStatement('{')) {
       statement.finnalBody = this.parseBlock('FinnalBlock');
     }
+
+    if (!statement.catchCallback && !statement.finnalBody) statement.unexpects.push(
+      new UnExpectStatement(this.currentToken.value, 'expect finally', this.currentToken.loc) 
+    )
 
     return endParse();
   }
 
   private parseDoWihleStatement() {
+    debugger;
     let statement = new DoWhileStatement(this.currentToken);
     let endParse = this.startParse(statement, IS_PARSING_DOWHILE);
 
@@ -738,7 +761,7 @@ export class JavascriptAstParsser {
     if(statement.unexpects.length) return endParse();
 
     while(this.consumeNextWordIfMatch('else')) {
-      if (this.consumeNextWordIfMatch('if', true)) {
+      if (this.consumeNextWordIfMatch('if')) {
         let elseIf = {
           condition: null,
           body: null
@@ -1012,15 +1035,14 @@ export class JavascriptAstParsser {
 
   private tryParseSuffixUnary(curStatement: Statement) {
     if (!canBeSuffixStatement.includes(curStatement.type)) return null;
-    let pos = this.pos;
-    this.skipSpace();
-    if (!Patterns.canBeSuffixUnary.test(this.input.slice(this.pos, this.pos + 2))) {
-      this.pos = pos;
+    let reset = this.markPos();
+    this.next()
+    if (!Patterns.canBeSuffixUnary.test(this.currentToken.value)) {
+      reset();
       return null;
     }
     let endParse = this.startParse(curStatement);
-    let nextStament: Statement = this.parseStatement();
-    curStatement.suffix = nextStament as OperatorStatement;
+    curStatement.suffix = new OperatorStatement(this.currentToken);
     return endParse();
   }
 
