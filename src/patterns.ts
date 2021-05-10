@@ -1,5 +1,5 @@
 export const Patterns = {
-    keywords: /^(?:break|case|catch|continue|debugger|default|do|else|finally|for|function|if|return|switch|throw|try|var|while|with|null|true|false|instanceof|typeof|void|delete|new|in|this|const|class|extends|export|import|from|let|as)$/,
+    keywords: /^(?:break|case|catch|continue|debugger|default|do|else|finally|for|function|if|return|switch|throw|try|var|while|with|instanceof|typeof|void|delete|new|in|const|class|extends|export|import|from|let|as)$/,
     whiteSpaceOrComment: /(?:\s|\/\/.*|\/\*[^]*?\*\/)*/g,
     reservedWordsStrict: /^(?:enum|await|implements|interface|let|package|private|protected|public|static|yield)$/,
     reservedWordsStrictBind: /^(?:enum|await|implements|interface|let|package|private|protected|public|static|yield|eval|arguments)$/,
@@ -14,5 +14,6 @@ export const Patterns = {
     canPrefixAssign: /^(?:\+|\-|\*|\/|\||\%|\&|\^|\<\<|\>\>|\>|\<|\=)$/,
     assign: /^(?:\=|\+\=|\-\=|\*\=|\/\=|\%\=|\|\=|\&\=|\>\>\=|\<\<\=)$/,
     canReapeat: /^(?:\+|\-|\*)$/,
-    canBeSuffixUnary:/^(?:\+\+|\-\-)$/
+    canBeSuffixUnary:/^(?:\+\+|\-\-)$/,
+    valueLiterature: /true|false|null|undefined|NaN/
 }

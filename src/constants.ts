@@ -11,6 +11,7 @@ export const IS_PARSING_IMPORT = 0b100000;
 export const IS_PARSING_VARDECLARATION = 0b1000000;
 export const IS_PARSING_FUNDECLARATION = 0b10000000;
 export const IS_PARSING_ACCESSPROP = 0b100000000;
+export const IS_PARSING_SWITCH = 0b1000000000;
 
 export const NEED_PURE_IDENTIFIER = IS_PARSING_FUNDECLARATION | IS_PARSING_ACCESSPROP;
 
@@ -44,7 +45,10 @@ export const canBeConditionStatement = [
   'StringLiteratureStatement',
   'TemplateStringStatement',
   'TernaryStatement',
-  'ObjectLiteratureStatement'
+  'ObjectLiteratureStatement',
+  'ValueLiteratureStatement',
+  'BracketEnwrapStatement',
+  'NewStatement'
 ]
 
 export const canBeValueStatements = [
@@ -61,7 +65,9 @@ export const canBeValueStatements = [
   'StringLiteratureStatement',
   'TemplateStringStatement',
   'TernaryStatement',
-  'BracketEnwrapStatement'
+  'BracketEnwrapStatement',
+  'ValueLiteratureStatement',
+  'NewStatement'
 ]
 
 export const canBeListStatement = [
@@ -71,7 +77,7 @@ export const canBeListStatement = [
   'ComputeAccessStatement',
   'FunctionCallStatement',
   'IdentifierLiteratureStatement',
-  'TernaryStatement'
+  'TernaryStatement',
 ]
 
 export enum BlockType {

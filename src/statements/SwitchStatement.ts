@@ -5,7 +5,7 @@ import { Statement } from "./Statement";
 export class SwitchStatement extends Statement {
     type = 'switchStatement';
     case: CaseStatement[] = [];
-    default: Block;
+    beCompared: Statement;
     constructor(currentToken: any) {
         super();
         this.loc.start = currentToken.loc.start;

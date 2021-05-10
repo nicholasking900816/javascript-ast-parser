@@ -1,5 +1,5 @@
 import { JavascriptAst } from './JavascriptAst';
-import { ExpectCloseMap, LiteratureType, canBePreffixStatement, IS_PARSING_CASE, IS_PARSING_TRY, IS_PARSING_DOWHILE, canBeConditionStatement, canBeValueStatements, canBeListStatement, IS_PARSING_CLASSDECLARATION, IS_PARSING_COMPUTE, IS_PARSING_IMPORT, canBeSuffixStatement, IS_PARSING_VARDECLARATION, IS_PARSING_FUNDECLARATION, NEED_PURE_IDENTIFIER, IS_PARSING_ACCESSPROP } from './constants';
+import { ExpectCloseMap, LiteratureType, canBePreffixStatement, IS_PARSING_CASE, IS_PARSING_TRY, IS_PARSING_DOWHILE, canBeConditionStatement, canBeValueStatements, canBeListStatement, IS_PARSING_CLASSDECLARATION, IS_PARSING_COMPUTE, IS_PARSING_IMPORT, canBeSuffixStatement, IS_PARSING_VARDECLARATION, IS_PARSING_FUNDECLARATION, NEED_PURE_IDENTIFIER, IS_PARSING_ACCESSPROP, IS_PARSING_SWITCH } from './constants';
 import { Patterns } from "./patterns";
 import { isIdentifierChar, isIdentifierStart, isNumberStart, isNumberCharCode, isHexCharCode, assertUnexpect } from "./javasriptAstParserUtil";
 import { UnExpectStatement } from './statements/UnExpectStatement';
@@ -35,6 +35,7 @@ import { CommontStatement } from './statements/CommentStatement';
 import { ClassDeclarationStatement } from './statements/ClassDeclarationStatement';
 import { AssignStatement } from './statements/AssignStatement';
 import { OperatorStatement } from './statements/OperatorStatement';
+import { ValueLiteratureStatement } from './statements/ValueLiteratureStatement';
 
 export class JavascriptAstParsser {
   static nonASCIIwhitespace = /[\u1680\u2000-\u200a\u202f\u205f\u3000\ufeff]/;
@@ -46,6 +47,8 @@ export class JavascriptAstParsser {
   private tokens: any = [];
   private parsingStatement: Statement;
   private currentLine = 1;
+  private isParsingFunDeclaration = false;
+  private isParsingLoop = false;
 
   ast: JavascriptAst;
   
@@ -191,7 +194,7 @@ export class JavascriptAstParsser {
   }
 
   private startParse(statement: Statement, excutionFlag?: number) {
-    let prevParsingStatement = this.parsingStatement;
+    let prevParsingStatement = this.parsingStatement, prevIsParsingLoop = this.isParsingLoop, prevIsParsingFunDe = this.isParsingFunDeclaration;
     this.parsingStatement = statement;
     excutionFlag && (this.excutionFlag |= excutionFlag);
     return (expectExpressionEnd = true) => {
@@ -199,7 +202,14 @@ export class JavascriptAstParsser {
         this.expectExpressionEnd();
       }
       statement.loc.end = this.pos;
+      if (this.parsingStatement.type === 'FunDeclarationStatement') {
+        this.isParsingFunDeclaration = false
+      } else if (['ForLoopStatement', 'DoWhileStatement', 'WhileStatement', 'CaseStatement'].includes(this.parsingStatement.type)) {
+        this.isParsingLoop = false;
+      }
       this.parsingStatement = prevParsingStatement;
+      this.isParsingLoop = prevIsParsingLoop;
+      this.isParsingFunDeclaration = prevIsParsingFunDe;
       excutionFlag && (this.excutionFlag &= ~excutionFlag);
       return statement;
     }
@@ -236,6 +246,10 @@ export class JavascriptAstParsser {
     this.next();
     if (this.currentToken.type === 'Keyword') {
       return this.parseIsStartWithKeyword();
+    } else if (this.currentToken.type === 'ValueLiterature') {
+      return new ValueLiteratureStatement(this.currentToken);
+    } else if (this.currentToken.type === 'TemplateStrStart') {
+      return this.parseTemplateStrStatement();
     } else if (this.currentToken.type && this.currentToken.type.indexOf('Literature') > -1) {
       let statement = new LiteratureType[this.currentToken.type](this.currentToken);
       if(this.excutionFlag & NEED_PURE_IDENTIFIER) return statement;
@@ -284,8 +298,10 @@ export class JavascriptAstParsser {
       this.parsingStatement.unexpects.push(new UnExpectStatement(statement, 'unexpect statement', this.currentToken.loc));
     } else {
       if (this.parsingStatement && this.parsingStatement.unexpects.length) return null;
+      if (this.currentToken.value === '(' && expectStatementType.includes('BracketEnwrapStatement')) return this.parseBracketEnwrapStatement();
       if (this.currentToken.value === '{' && expectStatementType.includes('ObjectLiteratureStatement')) return this.parseObjLiteratureStatement();
       if (this.currentToken.value === '[' && expectStatementType.includes('ArrayLiteratureStatement')) return this.parseArrayLiteratureStatement();
+      this.parsingStatement.unexpects.push(new UnExpectStatement(this.currentToken.value, `unexpect statement ${this.currentToken.value}`, this.currentToken.loc))
     }
 
     return null;
@@ -322,6 +338,8 @@ export class JavascriptAstParsser {
       this.currentToken.value = this.readIdentifier();
       if (Patterns.keywords.test(this.currentToken.value)) {
         this.currentToken.type = 'Keyword'
+      } else if (Patterns.valueLiterature.test(this.currentToken.value)) {
+        this.currentToken.type = 'ValueLiterature'
       } else {
         this.currentToken.type = 'IdentifierLiterature'
       }
@@ -348,6 +366,8 @@ export class JavascriptAstParsser {
           this.currentToken.type = 'BlockStart';
         } else if (Patterns.blockClose.test(this.currentToken.value)) {
           this.currentToken.type = 'BlockClose'
+        } else if (this.currentToken.value === '`') {
+          this.currentToken.type = 'TemplateStrStart'
         }
     }
   }
@@ -434,10 +454,13 @@ export class JavascriptAstParsser {
   }
 
   private parseBlock(blockType, endCheck: Function = (statement: Statement) => this.currentToken.value === '}') {
-    let block = new Block(blockType);
-    let prevContext = this.excutionFlag;
+    let block = new Block(blockType),
+        prevContext = this.excutionFlag,
+        prevParsingStatement = this.parsingStatement;
     this.excutionFlag = 0;
+    this.parsingStatement = null;
     let statement = this.parseStatement();
+
     while(!endCheck(statement) && !this.isReadAll()) {
       if (!statement) {
         if (this.currentToken.value === '{') {
@@ -449,7 +472,9 @@ export class JavascriptAstParsser {
       statement && block.body.push(statement);
       statement = this.parseStatement();
     }
+
     this.excutionFlag = prevContext;
+    this.parsingStatement = prevParsingStatement;
     return block;
   }
 
@@ -528,22 +553,25 @@ export class JavascriptAstParsser {
   }
 
   private parseFunDeclarationStatement() {
-    if (this.excutionFlag & IS_PARSING_CLASSDECLARATION) this.skipSpace();
     let statement: FunDeclarationStatement = new FunDeclarationStatement(this.currentToken);
     let endParse = this.startParse(statement, IS_PARSING_FUNDECLARATION);
-    
+    this.isParsingFunDeclaration = true;
     if (
       this.consumeStartTokenIfMatch('(') ||
       (statement.identifier = this.parseStatementIfTypeMatch('IdentifierLiteratureStatement')) &&
       this.expectNextNullStatement('(')
     ) {
       let formalPara: IdentifierLiteratureStatement;
-      while(formalPara = this.parseStatementIfTypeMatch('IdentifierLiteratureStatement')) {
-        statement.formalParas.push(formalPara);
-        if (this.consumeNextCharIfMatch(')')) {
-          break;
-        } else if (this.expectNextNullStatement(',')) {
-          continue;
+      if (!this.consumeNextCharIfMatch(')')) {
+        while(
+          formalPara = this.parseStatementIfTypeMatch('IdentifierLiteratureStatement')
+        ) {
+          statement.formalParas.push(formalPara);
+          if (this.consumeNextCharIfMatch(')')) {
+            break;
+          } else if (this.expectNextNullStatement(',')) {
+            continue;
+          }
         }
       }
     }
@@ -552,29 +580,6 @@ export class JavascriptAstParsser {
 
     if (this.expectNextNullStatement('{')) {
       statement.body = this.parseBlock('FunctionBody')
-    }
-
-    return endParse();
-  }
-
-  private parseCaseStatement() {
-    let statement = new CaseStatement(this.currentToken);
-    let endParse = this.startParse(statement, IS_PARSING_CASE)
-
-    if (!(statement.condition = this.parseStatementIfTypeMatch(canBeConditionStatement))) {
-      return endParse();
-    }
-
-    if (this.expectNextNullStatement(':')) {
-      if (this.consumeStartTokenIfMatch('{')) {
-        statement.body = this.parseBlock('CaseBody')
-      } else {
-        statement.body = this.parseBlock('CaseBody', (statement) => {
-          if (!statement) {
-            return ['case', 'default', '}'].includes(this.currentToken.value);
-          } 
-        })
-      }
     }
 
     return endParse();
@@ -645,10 +650,9 @@ export class JavascriptAstParsser {
   }
 
   private parseDoWihleStatement() {
-    debugger;
     let statement = new DoWhileStatement(this.currentToken);
     let endParse = this.startParse(statement, IS_PARSING_DOWHILE);
-
+    this.isParsingLoop = true;
     if (!this.expectNextNullStatement('{')) return endParse();
     statement.doBody = this.parseBlock('DoBody');
 
@@ -662,7 +666,8 @@ export class JavascriptAstParsser {
 
   private parseWhileStatment() {
     let statement: WhileStatement = new WhileStatement(this.currentToken);
-    let endParse = this.startParse(statement);
+    let endParse = this.startParse(statement, IS_PARSING_SWITCH);
+    this.isParsingLoop = true;
 
     if (
       this.expectNextNullStatement('(') &&
@@ -678,18 +683,30 @@ export class JavascriptAstParsser {
 
   private parseForLoopStatement() {
     let statement = new ForLoopStatement(this.currentToken);
-    let endParse = this.startParse(statement);
+    let endParse = this.startParse(statement), isForIn = false;
+    this.isParsingLoop = true;
     if (!this.expectNextNullStatement('(')) return endParse();
 
     if (!this.consumeNextCharIfMatch(';')) {
-      let part1 = this.parseStatementIfTypeMatch(['VariableDeclarationStatement', 'IdentifierLiteratureStatement']);
+      let part1 = this.parseStatementIfTypeMatch(canBeValueStatements.concat(['VariableDeclarationStatement', 'FunDeclarationStatement']));
       if (!part1) {
         return endParse()
-      } else if (part1.type === 'IdentifierLiteratureStatement' || part1.type === 'VariableDeclarationStatement' && part1.declarations.length === 1) {
-        if (this.consumeNextWordIfMatch('of')) {
+      } else if (
+        part1.type === 'IdentifierLiteratureStatement' ||
+        part1.type === 'VariableDeclarationStatement' && 
+        part1.declarations.length === 1 && 
+        part1.declarations[0].type !== 'AssignStatement'
+      ) {
+        if (
+          this.consumeNextWordIfMatch('of') ||
+          (isForIn = this.consumeNextWordIfMatch('in'))
+        ) {
           statement.item = part1;
           if (
-            this.parseStatementIfTypeMatch(canBeListStatement) && 
+            ( 
+              isForIn ? statement.forIn = this.parseStatementIfTypeMatch(canBeListStatement) : 
+              statement.forOf = this.parseStatementIfTypeMatch(canBeListStatement)
+            ) && 
             this.expectNextNullStatement(')') &&
             this.expectNextNullStatement('{')
           ) {
@@ -702,13 +719,12 @@ export class JavascriptAstParsser {
       if (!this.expectNextNullStatement(';')) return endParse();
     }
 
-    if (!this.consumeNextCharIfMatch(';')) {
-      if (
-        !(statement.part2 = this.parseStatementIfTypeMatch(canBeConditionStatement)) ||
-        !this.expectNextNullStatement(';')
-      ) {
-        return endParse()
-      }
+    if (
+      !this.consumeNextCharIfMatch(';') && 
+      !(statement.part2 = this.parseStatementIfTypeMatch(canBeConditionStatement)) &&
+      !this.expectNextNullStatement(';')
+    ) {
+      return endParse()
     }
 
     if (
@@ -725,40 +741,48 @@ export class JavascriptAstParsser {
   private parseConditionStatement() {
     let statement = new ConditionStatement(this.currentToken);
     let endParse = this.startParse(statement);
+    let expectLineEnd = false;
 
     let parseConditionBlock = () => {
       if (this.consumeNextCharIfMatch('{')) {
         return this.parseBlock('ConditionBlock')
       } else {
-        let pos = this.pos, currentLine = this.currentLine;
+        expectLineEnd = true;
+        let currentLine = this.currentLine;
+        let reset = this.markPos();
         let block = new Block('ConditionBlock');
         if (this.consumeNextWordIfMatch('else')) {
-          if (currentLine = this.currentLine) {
+          if (currentLine === this.currentLine) {
             statement.unexpects.push(new UnExpectStatement('else', 'statement expect', this.currentToken.loc));
             return null;
           }
-          this.pos = pos;
+          reset();
+          return block;
+        } else if (this.consumeNextCharIfMatch(';')) {
+          reset();
           return block;
         }
+
         let nextStatement = this.safeParseStatement();
         if (nextStatement) {
           block.body.push(nextStatement)
         }
+        return block;
       }
     }
     
     if (
       !this.expectNextNullStatement('(') ||
       !(statement.if.condition = this.parseStatementIfTypeMatch(canBeConditionStatement)) ||
-      !this.expectNextNullStatement(')') ||
-      !this.expectNextNullStatement('{')
+      !this.expectNextNullStatement(')') 
     ) {
       return endParse()
     }
 
     statement.if.body = parseConditionBlock();
 
-    if(statement.unexpects.length) return endParse();
+    if(statement.unexpects.length || expectLineEnd && !this.isLineEnd()) return endParse();
+    expectLineEnd = false;
 
     while(this.consumeNextWordIfMatch('else')) {
       if (this.consumeNextWordIfMatch('if')) {
@@ -785,23 +809,80 @@ export class JavascriptAstParsser {
   }
 
   private parseReturnStatement() {
+    debugger;
     let statement = new UnitaryStatement(this.currentToken);
+    if (!this.isParsingFunDeclaration) return new UnExpectStatement(statement, 'A "return" statement can only be used within a function body')
     let endParse = this.startParse(statement);
-    statement.target = this.parseStatementIfTypeMatch(canBeValueStatements);
+
+    if (!this.isLineEnd() && this.peekNextChar() !== ';') {
+      statement.target = this.parseStatementIfTypeMatch(canBeValueStatements);
+    }
+    
     return endParse();
   }
 
   private parseSwitchStatement() {
     let statement = new SwitchStatement(this.currentToken);
     let endParse = this.startParse(statement);
-    let caseStatement: any;
+    let caseStatement: Statement;
     
-    while(caseStatement = this.tryParseStatementIfTypeMatch('CaseStatement')) {
-      statement.case.push(caseStatement)
+    if (!(
+      this.expectNextNullStatement('(') &&
+      (statement.beCompared = this.parseStatementIfTypeMatch(canBeValueStatements)) &&
+      this.expectNextNullStatement([')', '{'])
+    )) return endParse()
+
+    while(!this.consumeCloseTokenIfMatch('}')) {
+      if (caseStatement = this.parseCaseStatement()) {
+        if (caseStatement.unexpects.length) {
+          statement.unexpects.push(caseStatement);
+          break;
+        }
+        statement.case.push(caseStatement as CaseStatement)
+      } else {
+        break
+      }
     }
 
-    if (this.consumeNextWordIfMatch('default')) {
-      statement.default = this.parseBlock('SwitchDefaultBlock')
+    return endParse();
+  }
+
+  private parseCaseStatement() {
+    if (
+      !this.consumeNextWordIfMatch('case') &&
+      !this.consumeNextWordIfMatch('default') 
+    ) {
+      this.next();
+      this.parsingStatement.unexpects.push(new UnExpectStatement(this.currentToken.value, 'expect "case" or "default"', this.currentToken.loc))
+      return null
+    }
+
+    let statement = new CaseStatement(this.currentToken);
+    let endParse = this.startParse(statement, IS_PARSING_CASE)
+    this.isParsingLoop = true;
+    statement.isDefault = this.currentToken.value === 'default'
+
+    if (!statement.isDefault && !(statement.condition = this.parseStatementIfTypeMatch(canBeConditionStatement))) {
+      return endParse();
+    }
+
+    if (this.expectNextNullStatement(':')) {
+      if (this.consumeStartTokenIfMatch('{')) {
+        statement.body = this.parseBlock('CaseBody')
+      } else {
+        let reset = this.markPos()
+        statement.body = this.parseBlock('CaseBody', (statement) => {
+          if (
+            (!statement || statement.type === 'KeyWordStatement') &&
+            ['case', 'default', '}'].includes(this.currentToken.value)
+          ) {
+            reset();
+            return true;
+          } else {
+            reset = this.markPos();
+          }
+        })
+      }
     }
 
     return endParse();
@@ -847,6 +928,7 @@ export class JavascriptAstParsser {
     let endParse = this.startParse(statement, IS_PARSING_CLASSDECLARATION);
 
     if (
+      !(statement.className = this.parseStatementIfTypeMatch('IdentifierLiteratureStatement')) ||
       this.consumeNextWordIfMatch('extends') && 
       !(statement.extend = this.parseStatementIfTypeMatch('IdentifierLiteratureStatement')) ||
       !this.expectNextNullStatement('{')
@@ -854,11 +936,32 @@ export class JavascriptAstParsser {
       return endParse();
     }
 
-    while(!this.consumeCloseTokenIfMatch('}')) {
-      let method = this.parseStatementIfTypeMatch('FunDeclarationStatement');
+    while(!this.consumeCloseTokenIfMatch('}') && !this.isReadAll()) {
+      let method = this.parseClassMehod();
       if(!method) return endParse();
-      statement.methods.push(method);
+      statement.methods.push(method as FunDeclarationStatement);
     }
+    return endParse();
+  }
+
+  private parseClassMehod() {
+    let reset = this.markPos();
+    this.next();
+    if (this.currentToken.type !== 'IdentifierLiterature') {
+      this.parsingStatement.unexpects.push(new UnExpectStatement(
+        this.currentToken.value,
+        'expect identifier',
+        this.currentToken.loc
+      ))
+      return null;
+    }
+    reset();
+    let statement = this.parseFunDeclarationStatement();
+    if (statement.unexpects.length) {
+      this.parsingStatement.unexpects.push(statement);
+      return null
+    } 
+    return statement;
   }
 
   private parseExportStatement() {
@@ -887,14 +990,20 @@ export class JavascriptAstParsser {
       let asStatement: Statement;
       if (identifier) {
         if (identifier.type === 'VariableDeclarationStatement') {
+           statement.exportContent.push(identifier);
            return endParse();
         }
         if (this.consumeNextWordIfMatch('as') && !(asStatement = this.parseStatementIfTypeMatch('IdentifierLiteratureStatement'))) {
           return endParse();
         }
+        statement.exportContent.push({
+          name: identifier,
+          as: asStatement
+        })
       } else {
         return endParse();
       }
+      
     }
 
     this.expectNextNullStatement('from') &&
@@ -983,7 +1092,10 @@ export class JavascriptAstParsser {
     if (!this.consumeNextCharIfMatch('.')) return null// '.';
     let statement = new AccessProStatement(propOwener);
     let endParse = this.startParse(statement, IS_PARSING_ACCESSPROP);
-    if(statement.propertyName = this.parseStatementIfTypeMatch('IdentifierLiteratureStatement')) return this.tryParse(endParse(false));
+    if(statement.propertyName = this.parseStatementIfTypeMatch('IdentifierLiteratureStatement')) {
+      let resultStatement = endParse(false);
+      return this.tryParseAssign(resultStatement) || this.tryParse(resultStatement);
+    }
     return endParse();
   }
 
@@ -996,7 +1108,8 @@ export class JavascriptAstParsser {
       (statement.propertyName = this.parseStatementIfTypeMatch(canBeValueStatements)) &&
       this.consumeCloseTokenIfMatch(']')
     ) {
-      return this.tryParse(endParse(false));
+      let resultStatement = endParse(false);
+      return this.tryParseAssign(resultStatement) || this.tryParse(resultStatement);
     }
     
     return endParse();
@@ -1007,16 +1120,19 @@ export class JavascriptAstParsser {
     let statement = new FunctionCallStatement(fnName);
     let endParse = this.startParse(statement);
 
-    while(true) {
-      let nextStatement: Statement = this.parseStatementIfTypeMatch(canBeValueStatements);
-      if (statement) {
-        statement.arguments.push(nextStatement);
-      } else {
-        return endParse();
+    if (!this.consumeCloseTokenIfMatch(')')) {
+      while(true) {
+        let nextStatement: Statement = this.parseStatementIfTypeMatch(canBeValueStatements);
+        if (statement) {
+          statement.arguments.push(nextStatement);
+        } else {
+          return endParse();
+        }
+        if (this.consumeCloseTokenIfMatch(')')) break;
+        if (!this.expectNextNullStatement(',')) return endParse();
       }
-      if (this.consumeCloseTokenIfMatch(')')) break;
-      if (!this.expectNextNullStatement(',')) return endParse();
     }
+  
     return this.tryParse(endParse(false));
   }
 
@@ -1046,7 +1162,7 @@ export class JavascriptAstParsser {
     return endParse();
   }
 
-  private tryParseAssign(identifier: IdentifierLiteratureStatement) {
+  private tryParseAssign(identifier: Statement) {
     let reset = this.markPos();
     this.next();
     if (!this.currentToken.isAssignOperator) {
@@ -1126,6 +1242,7 @@ export class JavascriptAstParsser {
   }
  
   private parseIsStartWithKeyword() {
+    let statement, endParse;
     switch(this.currentToken.value) {
       case 'import':
         return this.parseImportStatement();
@@ -1148,6 +1265,11 @@ export class JavascriptAstParsser {
         return this.parseForLoopStatement();  
       case 'if':
         return this.parseConditionStatement();
+      case 'else':
+        statement = new ConditionStatement(this.currentToken);
+        endParse = this.startParse(statement);
+        statement.unexpects.push(new UnExpectStatement(this.currentToken.value, 'expect "if"', this.currentToken.loc));
+        return endParse();
       case 'return':
         return this.parseReturnStatement();
       case 'switch':
@@ -1166,8 +1288,6 @@ export class JavascriptAstParsser {
         return this.parseClassDeclarationStatement();
       case 'export':
         return this.parseExportStatement();  
-      case 'case':
-        return this.parseCaseStatement();    
       case 'as':
         return null;  
       case 'from':
@@ -1175,12 +1295,15 @@ export class JavascriptAstParsser {
           return null;
         }
         return new UnExpectStatement(new KeyWordStatement(this.currentToken), 'expect import', this.currentToken.loc);
+      case 'case':
+      case 'default':
+        return new KeyWordStatement(this.currentToken)  
       case 'catch':
       case 'finnaly':
-        if(this.excutionFlag & IS_PARSING_TRY) {
-          return null;
-        }       
-        return new UnExpectStatement(new KeyWordStatement(this.currentToken), 'expect try', this.currentToken.loc);
+        statement = new TryCathchStatement(this.currentToken);
+        endParse = this.startParse(statement);
+        statement.unexpects.push(new UnExpectStatement(this.currentToken.value, 'expect "if"', this.currentToken.loc));
+        return endParse();
       default:
         return new KeyWordStatement(this.currentToken);
     }

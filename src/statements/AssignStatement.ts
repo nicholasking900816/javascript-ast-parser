@@ -4,7 +4,7 @@ import { Statement } from "./Statement";
 
 export class AssignStatement extends Statement {
     type = 'AssignStatement';
-    left: IdentifierLiteratureStatement;
+    left: Statement;
     right: Statement;
     operator: OperatorStatement;
     constructor(currentToken: any) {

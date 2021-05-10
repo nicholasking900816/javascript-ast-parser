@@ -7,6 +7,7 @@ import { VariableDeclarationStatement } from "./VariableDeclarationStatement";
 export class ForLoopStatement extends Statement {
     type = 'ForLoopStatement';
     forOf: Statement;
+    forIn: Statement;
     item: Statement;
     part1: Statement;
     part2: Statement;
